@@ -14,9 +14,13 @@
 // Include common definitions from above.
 apply from: '../build.common.gradle'
 apply from: '../build.dependencies.gradle'
+apply plugin: 'org.jetbrains.kotlin.android'
 
 android {
     namespace = 'org.firstinspires.ftc.teamcode'
+    kotlinOptions {
+        jvmTarget = '1.8'
+    }
 
     packagingOptions {
         jniLibs.useLegacyPackaging true
@@ -27,6 +31,9 @@ repositories {
     maven {
         url = 'https://maven.brott.dev/'
     }
+    maven {
+        url = "https://repo.dairy.foundation/releases"
+    }
 }
 
 dependencies {
@@ -36,4 +43,8 @@ dependencies {
     implementation "com.acmerobotics.roadrunner:core:1.0.0"
     implementation "com.acmerobotics.roadrunner:actions:1.0.0"
     implementation "com.acmerobotics.dashboard:dashboard:0.4.16"
+
+    implementation "dev.frozenmilk.dairy:Core:1.0.1"
+    implementation "dev.frozenmilk.dairy:Pasteurized:1.0.0"
+    implementation "dev.frozenmilk.mercurial:Mercurial:1.0.0"
 }
