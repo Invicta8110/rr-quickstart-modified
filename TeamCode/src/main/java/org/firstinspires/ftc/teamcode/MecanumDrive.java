@@ -32,6 +32,8 @@ import com.qualcomm.robotcore.hardware.DcMotorEx;
 import com.qualcomm.robotcore.hardware.HardwareMap;
 import com.qualcomm.robotcore.hardware.VoltageSensor;
 
+import org.firstinspires.ftc.teamcode.commands.FollowTrajectoryCommand;
+import org.firstinspires.ftc.teamcode.commands.TrajectoryCommandBuilder;
 import org.firstinspires.ftc.teamcode.localization.Localizer;
 import org.firstinspires.ftc.teamcode.localization.MecanumDriveLocalizer;
 import org.firstinspires.ftc.teamcode.messages.DriveCommandMessage;
@@ -42,6 +44,8 @@ import java.lang.Math;
 import java.util.Arrays;
 import java.util.LinkedList;
 import java.util.List;
+
+import dev.frozenmilk.mercurial.commands.groups.Sequential;
 
 @Config
 public final class MecanumDrive {
@@ -85,17 +89,17 @@ public final class MecanumDrive {
 
     public static Params PARAMS = new Params();
 
-    public final MecanumKinematics kinematics = new MecanumKinematics(
+    public static final MecanumKinematics kinematics = new MecanumKinematics(
             PARAMS.inPerTick * PARAMS.trackWidthTicks, PARAMS.inPerTick / PARAMS.lateralInPerTick);
 
     public final TurnConstraints defaultTurnConstraints = new TurnConstraints(
             PARAMS.maxAngVel, -PARAMS.maxAngAccel, PARAMS.maxAngAccel);
-    public final VelConstraint defaultVelConstraint =
+    public static final VelConstraint defaultVelConstraint =
             new MinVelConstraint(Arrays.asList(
                     kinematics.new WheelVelConstraint(PARAMS.maxWheelVel),
                     new AngularVelConstraint(PARAMS.maxAngVel)
             ));
-    public final AccelConstraint defaultAccelConstraint =
+    public static final AccelConstraint defaultAccelConstraint =
             new ProfileAccelConstraint(PARAMS.minProfileAccel, PARAMS.maxProfileAccel);
 
     public final DcMotorEx leftFront, leftBack, rightBack, rightFront;
@@ -110,9 +114,9 @@ public final class MecanumDrive {
     private final LinkedList<Pose2d> poseHistory = new LinkedList<>();
 
     private final DownsampledWriter estimatedPoseWriter = new DownsampledWriter("ESTIMATED_POSE", 50_000_000);
-    private final DownsampledWriter targetPoseWriter = new DownsampledWriter("TARGET_POSE", 50_000_000);
-    private final DownsampledWriter driveCommandWriter = new DownsampledWriter("DRIVE_COMMAND", 50_000_000);
-    private final DownsampledWriter mecanumCommandWriter = new DownsampledWriter("MECANUM_COMMAND", 50_000_000);
+    public final DownsampledWriter targetPoseWriter = new DownsampledWriter("TARGET_POSE", 50_000_000);
+    public final DownsampledWriter driveCommandWriter = new DownsampledWriter("DRIVE_COMMAND", 50_000_000);
+    public final DownsampledWriter mecanumCommandWriter = new DownsampledWriter("MECANUM_COMMAND", 50_000_000);
 
     public MecanumDrive(HardwareMap hardwareMap, Pose2d pose) {
         this.pose = pose;
@@ -401,5 +405,22 @@ public final class MecanumDrive {
                 defaultTurnConstraints,
                 defaultVelConstraint, defaultAccelConstraint
         );
+    }
+
+    public TrajectoryCommandBuilder commandBuilder(Pose2d beginPose) {
+        return new TrajectoryCommandBuilder(
+                (traj) -> new FollowTrajectoryCommand(traj, this),
+                beginPose,
+                new TrajectoryBuilderParams(
+                            1e-6,
+                            new ProfileParams(
+                                    0.25,
+                                    0.1,
+                                    1e-2
+                            )
+                    ),
+                    defaultVelConstraint,
+                    defaultAccelConstraint
+                );
     }
 }
