@@ -24,16 +24,23 @@ import com.acmerobotics.roadrunner.TankKinematics;
 import com.acmerobotics.roadrunner.Time;
 import com.acmerobotics.roadrunner.TimeTrajectory;
 import com.acmerobotics.roadrunner.TimeTurn;
+import com.acmerobotics.roadrunner.Trajectory;
 import com.acmerobotics.roadrunner.TrajectoryActionBuilder;
+import com.acmerobotics.roadrunner.TrajectoryBuilder;
 import com.acmerobotics.roadrunner.TrajectoryBuilderParams;
 import com.acmerobotics.roadrunner.TurnConstraints;
+import com.acmerobotics.roadrunner.Twist2dDual;
 import com.acmerobotics.roadrunner.Vector2d;
 import com.acmerobotics.roadrunner.Vector2dDual;
 import com.acmerobotics.roadrunner.VelConstraint;
 import com.acmerobotics.roadrunner.ftc.DownsampledWriter;
+import com.acmerobotics.roadrunner.ftc.Encoder;
 import com.acmerobotics.roadrunner.ftc.FlightRecorder;
 import com.acmerobotics.roadrunner.ftc.LazyImu;
 import com.acmerobotics.roadrunner.ftc.LynxFirmware;
+import com.acmerobotics.roadrunner.ftc.OverflowEncoder;
+import com.acmerobotics.roadrunner.ftc.PositionVelocityPair;
+import com.acmerobotics.roadrunner.ftc.RawEncoder;
 import com.qualcomm.hardware.lynx.LynxModule;
 import com.qualcomm.hardware.rev.RevHubOrientationOnRobot;
 import com.qualcomm.robotcore.hardware.DcMotor;
@@ -41,13 +48,14 @@ import com.qualcomm.robotcore.hardware.DcMotorEx;
 import com.qualcomm.robotcore.hardware.HardwareMap;
 import com.qualcomm.robotcore.hardware.VoltageSensor;
 
-import org.firstinspires.ftc.teamcode.localization.Localizer;
-import org.firstinspires.ftc.teamcode.localization.TankDriveLocalizer;
 import org.firstinspires.ftc.teamcode.messages.DriveCommandMessage;
 import org.firstinspires.ftc.teamcode.messages.PoseMessage;
 import org.firstinspires.ftc.teamcode.messages.TankCommandMessage;
+import org.firstinspires.ftc.teamcode.messages.TankLocalizerInputsMessage;
 
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.LinkedList;
 import java.util.List;
 
@@ -120,6 +128,91 @@ public final class TankDrive {
 
     private final DownsampledWriter tankCommandWriter = new DownsampledWriter("TANK_COMMAND", 50_000_000);
 
+    public class DriveLocalizer implements Localizer {
+        public final List<Encoder> leftEncs, rightEncs;
+
+        private double lastLeftPos, lastRightPos;
+        private boolean initialized;
+
+        public DriveLocalizer() {
+            {
+                List<Encoder> leftEncs = new ArrayList<>();
+                for (DcMotorEx m : leftMotors) {
+                    Encoder e = new OverflowEncoder(new RawEncoder(m));
+                    leftEncs.add(e);
+                }
+                this.leftEncs = Collections.unmodifiableList(leftEncs);
+            }
+
+            {
+                List<Encoder> rightEncs = new ArrayList<>();
+                for (DcMotorEx m : rightMotors) {
+                    Encoder e = new OverflowEncoder(new RawEncoder(m));
+                    rightEncs.add(e);
+                }
+                this.rightEncs = Collections.unmodifiableList(rightEncs);
+            }
+
+            // TODO: reverse encoder directions if needed
+            //   leftEncs.get(0).setDirection(DcMotorSimple.Direction.REVERSE);
+        }
+
+        @Override
+        public Twist2dDual<Time> update() {
+            List<PositionVelocityPair> leftReadings = new ArrayList<>(), rightReadings = new ArrayList<>();
+            double meanLeftPos = 0.0, meanLeftVel = 0.0;
+            for (Encoder e : leftEncs) {
+                PositionVelocityPair p = e.getPositionAndVelocity();
+                meanLeftPos += p.position;
+                meanLeftVel += p.velocity;
+                leftReadings.add(p);
+            }
+            meanLeftPos /= leftEncs.size();
+            meanLeftVel /= leftEncs.size();
+
+            double meanRightPos = 0.0, meanRightVel = 0.0;
+            for (Encoder e : rightEncs) {
+                PositionVelocityPair p = e.getPositionAndVelocity();
+                meanRightPos += p.position;
+                meanRightVel += p.velocity;
+                rightReadings.add(p);
+            }
+            meanRightPos /= rightEncs.size();
+            meanRightVel /= rightEncs.size();
+
+            FlightRecorder.write("TANK_LOCALIZER_INPUTS",
+                     new TankLocalizerInputsMessage(leftReadings, rightReadings));
+
+            if (!initialized) {
+                initialized = true;
+
+                lastLeftPos = meanLeftPos;
+                lastRightPos = meanRightPos;
+
+                return new Twist2dDual<>(
+                        Vector2dDual.constant(new Vector2d(0.0, 0.0), 2),
+                        DualNum.constant(0.0, 2)
+                );
+            }
+
+            TankKinematics.WheelIncrements<Time> twist = new TankKinematics.WheelIncrements<>(
+                    new DualNum<Time>(new double[] {
+                            meanLeftPos - lastLeftPos,
+                            meanLeftVel
+                    }).times(PARAMS.inPerTick),
+                    new DualNum<Time>(new double[] {
+                            meanRightPos - lastRightPos,
+                            meanRightVel,
+                    }).times(PARAMS.inPerTick)
+            );
+
+            lastLeftPos = meanLeftPos;
+            lastRightPos = meanRightPos;
+
+            return kinematics.forward(twist);
+        }
+    }
+
     public TankDrive(HardwareMap hardwareMap, Pose2d pose) {
         this.pose = pose;
 
@@ -152,7 +245,7 @@ public final class TankDrive {
 
         voltageSensor = hardwareMap.voltageSensor.iterator().next();
 
-        localizer = new TankDriveLocalizer(this);
+        localizer = new TankDrive.DriveLocalizer();
 
         FlightRecorder.write("TANK_PARAMS", PARAMS);
     }
@@ -357,8 +450,9 @@ public final class TankDrive {
         }
     }
 
-    public Pose2d getPose() {
-        pose = localizer.updatePositionEstimate(pose);
+    public PoseVelocity2d updatePoseEstimate() {
+        Twist2dDual<Time> twist = localizer.update();
+        pose = pose.plus(twist.value());
 
         poseHistory.add(pose);
         while (poseHistory.size() > 100) {
@@ -367,16 +461,7 @@ public final class TankDrive {
 
         estimatedPoseWriter.write(new PoseMessage(pose));
 
-        return pose;
-    }
-
-    public PoseVelocity2d getVelocity() {
-        return localizer.updateVelocityEstimate();
-    }
-
-    public PoseVelocity2d updatePoseEstimate() {
-        pose = getPose();
-        return getVelocity();
+        return twist.velocity().value();
     }
 
     private void drawPoseHistory(Canvas c) {
@@ -410,5 +495,113 @@ public final class TankDrive {
                 defaultTurnConstraints,
                 defaultVelConstraint, defaultAccelConstraint
         );
+    }
+
+
+    public TrajectoryBuilder trajectoryBuilder(Pose2d beginPose) {
+        return new TrajectoryBuilder(
+                new TrajectoryBuilderParams(
+                        1e-6,
+                        new ProfileParams(
+                                0.25, 0.1, 1e-2
+                        )
+                ),
+                beginPose,
+                0.0,
+                defaultVelConstraint,
+                defaultAccelConstraint
+        );
+    }
+
+    /**
+     * Follow a trajectory.
+     * @param trajectory trajectory to follow
+     * @param t time to follow in seconds
+     * @return whether the trajectory has been completed
+     */
+    public boolean followTrajectory(TimeTrajectory trajectory, double t) {
+        if (t >= trajectory.duration) {
+            leftMotors.forEach(m -> m.setPower(0));
+            rightMotors.forEach(m -> m.setPower(0));
+
+            return true;
+        }
+
+        DualNum<Time> x = trajectory.profile.get(t);
+
+        Pose2dDual<Arclength> txWorldTarget = trajectory.path.get(x.value(), 3);
+        targetPoseWriter.write(new PoseMessage(txWorldTarget.value()));
+
+        updatePoseEstimate();
+
+        PoseVelocity2dDual<Time> command = new RamseteController(kinematics.trackWidth, PARAMS.ramseteZeta, PARAMS.ramseteBBar)
+                .compute(x, txWorldTarget, pose);
+        driveCommandWriter.write(new DriveCommandMessage(command));
+
+        TankKinematics.WheelVelocities<Time> wheelVels = kinematics.inverse(command);
+        double voltage = voltageSensor.getVoltage();
+        final MotorFeedforward feedforward = new MotorFeedforward(PARAMS.kS,
+                PARAMS.kV / PARAMS.inPerTick, PARAMS.kA / PARAMS.inPerTick);
+        double leftPower = feedforward.compute(wheelVels.left) / voltage;
+        double rightPower = feedforward.compute(wheelVels.right) / voltage;
+        tankCommandWriter.write(new TankCommandMessage(voltage, leftPower, rightPower));
+
+        for (DcMotorEx m : leftMotors) {
+            m.setPower(leftPower);
+        }
+        for (DcMotorEx m : rightMotors) {
+            m.setPower(rightPower);
+        }
+
+        return false;
+    }
+
+    /**
+     * Follow a trajectory.
+     * @param trajectory trajectory to follow
+     * @param t time to follow in seconds
+     * @return whether the trajectory has been completed
+     **/
+    public boolean followTrajectory(Trajectory trajectory, double t) {
+        return followTrajectory(new TimeTrajectory(trajectory), t);
+    }
+
+    /**
+     * Follow a trajectory in a blocking manner.
+     * This will run until the trajectory is completed,
+     * but nothing else can occur during this process.
+     * @param trajectory trajectory to follow
+     */
+    public void followTrajectoryBlocking(TimeTrajectory trajectory) {
+        double t = 0;
+        double beginTs = System.nanoTime() * 1e-9;
+
+        while (!followTrajectory(trajectory, t)) {
+            t = (System.nanoTime() * 1e-9) - beginTs;
+        }
+
+        leftMotors.forEach(m -> m.setPower(0));
+        rightMotors.forEach(m -> m.setPower(0));
+    }
+
+    /**
+     * Follow a trajectory in a blocking manner.
+     * This will run until the trajectory is completed,
+     * but nothing else can occur during this process.
+     * @param trajectory trajectory to follow
+     **/
+    public void followTrajectoryBlocking(Trajectory trajectory) {
+        followTrajectoryBlocking(new TimeTrajectory(trajectory));
+    }
+
+    /**
+     * Follow a list of trajectories in a blocking manner.
+     * This can be used directly with TrajectoryBuilder.build().
+     * @param trajectories trajectories to follow
+     */
+    public void followTrajectoriesBlocking(List<Trajectory> trajectories) {
+        for (Trajectory trajectory : trajectories) {
+            followTrajectoryBlocking(trajectory);
+        }
     }
 }
