@@ -48,6 +48,7 @@ import com.qualcomm.robotcore.hardware.DcMotorEx;
 import com.qualcomm.robotcore.hardware.HardwareMap;
 import com.qualcomm.robotcore.hardware.VoltageSensor;
 
+import org.firstinspires.ftc.teamcode.commands.TrajectoryCommandBuilder;
 import org.firstinspires.ftc.teamcode.messages.DriveCommandMessage;
 import org.firstinspires.ftc.teamcode.messages.PoseMessage;
 import org.firstinspires.ftc.teamcode.messages.TankCommandMessage;
@@ -58,6 +59,8 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedList;
 import java.util.List;
+
+import dev.frozenmilk.mercurial.commands.Lambda;
 
 @Config
 public final class TankDrive {
@@ -603,5 +606,46 @@ public final class TankDrive {
         for (Trajectory trajectory : trajectories) {
             followTrajectoryBlocking(trajectory);
         }
+    }
+
+    public TrajectoryCommandBuilder commandBuilder(Pose2d beginPose) {
+        return new TrajectoryCommandBuilder(
+                this::followTrajectoryCommand,
+                beginPose,
+                new TrajectoryBuilderParams(
+                        1e-6,
+                        new ProfileParams(
+                                0.25, 0.1, 1e-2
+                        )
+                ),
+                defaultVelConstraint,
+                defaultAccelConstraint
+        );
+    }
+
+    public Lambda followTrajectoryCommand(Trajectory trajectory) {
+        return new Lambda("Trajectory") {
+            double t = 0;
+            final double beginTs = System.nanoTime() * 1e-9;
+
+            boolean finished = false;
+
+            @Override
+            public void execute() {
+                t = (System.nanoTime() * 1e-9) - beginTs;
+                finished = followTrajectory(trajectory, t);
+            }
+
+            @Override
+            public boolean finished() {
+                return finished;
+            }
+
+            @Override
+            public void end(boolean b) {
+                leftMotors.forEach(m -> m.setPower(0));
+                rightMotors.forEach(m -> m.setPower(0));
+            }
+        };
     }
 }

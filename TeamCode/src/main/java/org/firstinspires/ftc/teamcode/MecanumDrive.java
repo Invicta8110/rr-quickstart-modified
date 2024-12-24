@@ -40,6 +40,7 @@ import com.qualcomm.robotcore.hardware.VoltageSensor;
 
 import org.firstinspires.ftc.robotcore.external.navigation.AngleUnit;
 import org.firstinspires.ftc.robotcore.external.navigation.YawPitchRollAngles;
+import org.firstinspires.ftc.teamcode.commands.TrajectoryCommandBuilder;
 import org.firstinspires.ftc.teamcode.messages.DriveCommandMessage;
 import org.firstinspires.ftc.teamcode.messages.MecanumCommandMessage;
 import org.firstinspires.ftc.teamcode.messages.MecanumLocalizerInputsMessage;
@@ -49,6 +50,8 @@ import java.lang.Math;
 import java.util.Arrays;
 import java.util.LinkedList;
 import java.util.List;
+
+import dev.frozenmilk.mercurial.commands.Lambda;
 
 @Config
 public final class MecanumDrive {
@@ -117,9 +120,9 @@ public final class MecanumDrive {
     private final LinkedList<Pose2d> poseHistory = new LinkedList<>();
 
     private final DownsampledWriter estimatedPoseWriter = new DownsampledWriter("ESTIMATED_POSE", 50_000_000);
-    private final DownsampledWriter targetPoseWriter = new DownsampledWriter("TARGET_POSE", 50_000_000);
-    private final DownsampledWriter driveCommandWriter = new DownsampledWriter("DRIVE_COMMAND", 50_000_000);
-    private final DownsampledWriter mecanumCommandWriter = new DownsampledWriter("MECANUM_COMMAND", 50_000_000);
+    public final DownsampledWriter targetPoseWriter = new DownsampledWriter("TARGET_POSE", 50_000_000);
+    public final DownsampledWriter driveCommandWriter = new DownsampledWriter("DRIVE_COMMAND", 50_000_000);
+    public final DownsampledWriter mecanumCommandWriter = new DownsampledWriter("MECANUM_COMMAND", 50_000_000);
 
     public class DriveLocalizer implements Localizer {
         public final Encoder leftFront, leftBack, rightBack, rightFront;
@@ -599,5 +602,48 @@ public final class MecanumDrive {
         for (Trajectory trajectory : trajectories) {
             followTrajectoryBlocking(trajectory);
         }
+    }
+
+    public TrajectoryCommandBuilder commandBuilder(Pose2d beginPose) {
+        return new TrajectoryCommandBuilder(
+                this::followTrajectoryCommand,
+                beginPose,
+                new TrajectoryBuilderParams(
+                        1e-6,
+                        new ProfileParams(
+                                0.25, 0.1, 1e-2
+                        )
+                ),
+                defaultVelConstraint,
+                defaultAccelConstraint
+        );
+    }
+
+    public Lambda followTrajectoryCommand(Trajectory trajectory) {
+        return new Lambda("Trajectory") {
+            double t = 0;
+            final double beginTs = System.nanoTime() * 1e-9;
+
+            boolean finished = false;
+
+            @Override
+            public void execute() {
+                t = (System.nanoTime() * 1e-9) - beginTs;
+                finished = followTrajectory(trajectory, t);
+            }
+
+            @Override
+            public boolean finished() {
+                return finished;
+            }
+
+            @Override
+            public void end(boolean b) {
+                leftFront.setPower(0);
+                leftBack.setPower(0);
+                rightBack.setPower(0);
+                rightFront.setPower(0);
+            }
+        };
     }
 }

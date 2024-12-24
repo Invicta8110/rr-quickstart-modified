@@ -4,43 +4,23 @@ import com.acmerobotics.roadrunner.AccelConstraint
 import com.acmerobotics.roadrunner.Pose2d
 import com.acmerobotics.roadrunner.Rotation2d
 import com.acmerobotics.roadrunner.TimeProfile
-import com.acmerobotics.roadrunner.TimeTrajectory
 import com.acmerobotics.roadrunner.Trajectory
 import com.acmerobotics.roadrunner.TrajectoryBuilder
 import com.acmerobotics.roadrunner.TrajectoryBuilderParams
 import com.acmerobotics.roadrunner.Vector2d
 import com.acmerobotics.roadrunner.VelConstraint
 import dev.frozenmilk.mercurial.commands.Command
+import dev.frozenmilk.mercurial.commands.groups.Parallel
 import dev.frozenmilk.mercurial.commands.groups.Sequential
-import java.util.stream.Collectors
-
-fun interface TrajectoryCommandFactory {
-    fun build(trajectory: TimeTrajectory?): Command?
-}
-
-fun interface SequentialFactory {
-    fun build(command: Iterable<Command?>?): Sequential
-
-    companion object {
-        fun sequence(command: Command, factory: SequentialFactory): SequentialFactory {
-            return SequentialFactory { c: Iterable<Command?>? ->
-                Sequential(
-                    factory.build(c),
-                    command
-                )
-            }
-        }
-    }
-}
+import dev.frozenmilk.mercurial.commands.util.Wait
 
 class TrajectoryCommandBuilder(
-    private val factory: TrajectoryCommandFactory,
-    private val beginPose: Pose2d,
+    private val factory: (Trajectory) -> Command,
+    beginPose: Pose2d,
     private var params: TrajectoryBuilderParams,
     private var baseVelConstraint: VelConstraint,
     private var baseAccelConstraint: AccelConstraint,
 ) {
-
     private var builder = TrajectoryBuilder(
         params,
         beginPose,
@@ -49,31 +29,55 @@ class TrajectoryCommandBuilder(
         baseAccelConstraint
     )
 
-    var size = 0;
-    val commands: MutableList<Command> = mutableListOf()
+    private var size = 0
+    private val commands: MutableList<Command> = mutableListOf()
 
     fun endTrajectory(): TrajectoryCommandBuilder {
-        val built = builder.build()
-        built.map { TimeTrajectory(it.path, TimeProfile(it.profile.baseProfile)) }
-            .mapNotNull { factory.build(it) }
-            .forEach { commands.add(it) }
+        if (size != commands.size) {
+            val built = builder.build()
+            built
+                .map { factory(it) }
+                .forEach { commands.add(it) }
 
-        builder = TrajectoryBuilder(
-            params,
-            built.last().path.end(1).value(),
-            0.0,
-            baseVelConstraint,
-            baseAccelConstraint,
-            built.last().path.poseMap
-        )
+            val lastPose = built.last().path.end(1).value()
+            val lastMap = built.last().path.poseMap
+
+            builder = TrajectoryBuilder(
+                params,
+                lastPose,
+                0.0,
+                baseVelConstraint,
+                baseAccelConstraint,
+                lastMap
+            )
+        }
 
         return this
     }
 
     fun build(): Command {
-        endTrajectory()
+        if (size != commands.size) {
+            endTrajectory()
+        }
 
         return Sequential(commands)
+    }
+
+    fun afterTime(time: Double, command: Command): TrajectoryCommandBuilder {
+        endTrajectory()
+
+        val last = commands.removeAt(commands.lastIndex)
+        commands += Parallel(last, Sequential(Wait(time), command))
+
+        return this
+    }
+
+    fun afterDisp(distance: Double, command: Command): TrajectoryCommandBuilder {
+        val built = builder.build()
+
+        val time = TimeProfile(built.last().profile.baseProfile).inverse(distance)
+
+        return this.afterTime(time, command)
     }
 
     fun stopAndAdd(command: Command): TrajectoryCommandBuilder {
@@ -104,7 +108,7 @@ class TrajectoryCommandBuilder(
         velOverride: VelConstraint? = null,
         accelOverride: AccelConstraint? = null
     ): TrajectoryCommandBuilder {
-        size += 1;
+        size += 1
         builder = builder.splineTo(point, tangent, velOverride, accelOverride)
         return this
     }
@@ -126,7 +130,7 @@ class TrajectoryCommandBuilder(
         velOverride: VelConstraint? = null,
         accelOverride: AccelConstraint? = null
     ): TrajectoryCommandBuilder {
-        size += 1;
+        size += 1
         builder = builder.splineToSplineHeading(point, tangent, velOverride, accelOverride)
         return this
     }
@@ -153,7 +157,7 @@ class TrajectoryCommandBuilder(
         velOverride: VelConstraint? = null,
         accelOverride: AccelConstraint? = null
     ): TrajectoryCommandBuilder {
-        size +=1 ;
+        size += 1
         builder = builder.splineToLinearHeading(point, tangent, velOverride, accelOverride)
         return this
     }
@@ -180,12 +184,12 @@ class TrajectoryCommandBuilder(
         velOverride: VelConstraint? = null,
         accelOverride: AccelConstraint? = null
     ): TrajectoryCommandBuilder {
-        size += 1;
+        size += 1
         builder = builder.splineToConstantHeading(point, tangent, velOverride, accelOverride)
         return this
     }
 
-@JvmOverloads
+    @JvmOverloads
     fun splineToConstantHeading(
         point: Vector2d,
         tangent: Double,
@@ -206,7 +210,7 @@ class TrajectoryCommandBuilder(
         velOverride: VelConstraint? = null,
         accelOverride: AccelConstraint? = null
     ): TrajectoryCommandBuilder {
-        size += 1;
+        size += 1
         builder = builder.strafeTo(point, velOverride, accelOverride)
         return this
     }
@@ -245,7 +249,7 @@ class TrajectoryCommandBuilder(
         velOverride: VelConstraint? = null,
         accelOverride: AccelConstraint? = null
     ): TrajectoryCommandBuilder {
-        size += 1;
+        size += 1
         builder = builder.strafeToLinearHeading(point, tangent, velOverride, accelOverride)
         return this
     }
