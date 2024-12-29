@@ -559,6 +559,46 @@ public final class TankDrive {
         return false;
     }
 
+    public boolean turn(TimeTurn turn, double t) {
+        if (t >= turn.duration) {
+            leftMotors.forEach(m -> m.setPower(0));
+            rightMotors.forEach(m -> m.setPower(0));
+
+            return true;
+        }
+
+        Pose2dDual<Time> txWorldTarget = turn.get(t);
+        targetPoseWriter.write(new PoseMessage(txWorldTarget.value()));
+
+        PoseVelocity2d robotVelRobot = updatePoseEstimate();
+
+        PoseVelocity2dDual<Time> command = new PoseVelocity2dDual<>(
+                Vector2dDual.constant(new Vector2d(0, 0), 3),
+                txWorldTarget.heading.velocity().plus(
+                        PARAMS.turnGain * pose.heading.minus(txWorldTarget.heading.value()) +
+                                PARAMS.turnVelGain * (robotVelRobot.angVel - txWorldTarget.heading.velocity().value())
+                )
+        );
+        driveCommandWriter.write(new DriveCommandMessage(command));
+
+        TankKinematics.WheelVelocities<Time> wheelVels = kinematics.inverse(command);
+        double voltage = voltageSensor.getVoltage();
+        final MotorFeedforward feedforward = new MotorFeedforward(PARAMS.kS,
+                PARAMS.kV / PARAMS.inPerTick, PARAMS.kA / PARAMS.inPerTick);
+        double leftPower = feedforward.compute(wheelVels.left) / voltage;
+        double rightPower = feedforward.compute(wheelVels.right) / voltage;
+        tankCommandWriter.write(new TankCommandMessage(voltage, leftPower, rightPower));
+
+        for (DcMotorEx m : leftMotors) {
+            m.setPower(leftPower);
+        }
+        for (DcMotorEx m : rightMotors) {
+            m.setPower(rightPower);
+        }
+
+        return false;
+    }
+
     /**
      * Follow a trajectory.
      * @param trajectory trajectory to follow
@@ -611,6 +651,7 @@ public final class TankDrive {
     public TrajectoryCommandBuilder commandBuilder(Pose2d beginPose) {
         return new TrajectoryCommandBuilder(
                 this::followTrajectoryCommand,
+                this::turnCommand,
                 beginPose,
                 new TrajectoryBuilderParams(
                         1e-6,
@@ -619,7 +660,8 @@ public final class TankDrive {
                         )
                 ),
                 defaultVelConstraint,
-                defaultAccelConstraint
+                defaultAccelConstraint,
+                defaultTurnConstraints
         );
     }
 
@@ -634,6 +676,32 @@ public final class TankDrive {
             public void execute() {
                 t = (System.nanoTime() * 1e-9) - beginTs;
                 finished = followTrajectory(trajectory, t);
+            }
+
+            @Override
+            public boolean finished() {
+                return finished;
+            }
+
+            @Override
+            public void end(boolean b) {
+                leftMotors.forEach(m -> m.setPower(0));
+                rightMotors.forEach(m -> m.setPower(0));
+            }
+        };
+    }
+
+    public Lambda turnCommand(TimeTurn turn) {
+        return new Lambda("Turn") {
+            double t = 0;
+            final double beginTs = System.nanoTime() * 1e-9;
+
+            boolean finished = false;
+
+            @Override
+            public void execute() {
+                t = (System.nanoTime() * 1e-9) - beginTs;
+                finished = turn(turn, t);
             }
 
             @Override

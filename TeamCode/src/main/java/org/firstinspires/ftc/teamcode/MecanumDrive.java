@@ -553,6 +553,48 @@ public final class MecanumDrive {
         return false;
     }
 
+    public boolean turn(TimeTurn turn, double t) {
+        if (t >= turn.duration) {
+            leftFront.setPower(0);
+            leftBack.setPower(0);
+            rightBack.setPower(0);
+            rightFront.setPower(0);
+
+            return true;
+        }
+
+        Pose2dDual<Time> txWorldTarget = turn.get(t);
+        targetPoseWriter.write(new PoseMessage(txWorldTarget.value()));
+
+        PoseVelocity2d robotVelRobot = updatePoseEstimate();
+
+        PoseVelocity2dDual<Time> command = new HolonomicController(
+                PARAMS.axialGain, PARAMS.lateralGain, PARAMS.headingGain,
+                PARAMS.axialVelGain, PARAMS.lateralVelGain, PARAMS.headingVelGain
+        )
+                .compute(txWorldTarget, pose, robotVelRobot);
+        driveCommandWriter.write(new DriveCommandMessage(command));
+
+        MecanumKinematics.WheelVelocities<Time> wheelVels = kinematics.inverse(command);
+        double voltage = voltageSensor.getVoltage();
+        final MotorFeedforward feedforward = new MotorFeedforward(PARAMS.kS,
+                PARAMS.kV / PARAMS.inPerTick, PARAMS.kA / PARAMS.inPerTick);
+        double leftFrontPower = feedforward.compute(wheelVels.leftFront) / voltage;
+        double leftBackPower = feedforward.compute(wheelVels.leftBack) / voltage;
+        double rightBackPower = feedforward.compute(wheelVels.rightBack) / voltage;
+        double rightFrontPower = feedforward.compute(wheelVels.rightFront) / voltage;
+        mecanumCommandWriter.write(new MecanumCommandMessage(
+                voltage, leftFrontPower, leftBackPower, rightBackPower, rightFrontPower
+        ));
+
+        leftFront.setPower(feedforward.compute(wheelVels.leftFront) / voltage);
+        leftBack.setPower(feedforward.compute(wheelVels.leftBack) / voltage);
+        rightBack.setPower(feedforward.compute(wheelVels.rightBack) / voltage);
+        rightFront.setPower(feedforward.compute(wheelVels.rightFront) / voltage);
+
+        return false;
+    }
+
     /**
      * Follow a trajectory.
      * @param trajectory trajectory to follow
@@ -607,6 +649,7 @@ public final class MecanumDrive {
     public TrajectoryCommandBuilder commandBuilder(Pose2d beginPose) {
         return new TrajectoryCommandBuilder(
                 this::followTrajectoryCommand,
+                this::turnCommand,
                 beginPose,
                 new TrajectoryBuilderParams(
                         1e-6,
@@ -615,7 +658,8 @@ public final class MecanumDrive {
                         )
                 ),
                 defaultVelConstraint,
-                defaultAccelConstraint
+                defaultAccelConstraint,
+                defaultTurnConstraints
         );
     }
 
@@ -630,6 +674,35 @@ public final class MecanumDrive {
             public void execute() {
                 t = (System.nanoTime() * 1e-9) - beginTs;
                 finished = followTrajectory(trajectory, t);
+            }
+
+            @Override
+            public boolean finished() {
+                return finished;
+            }
+
+            @Override
+            public void end(boolean b) {
+                leftFront.setPower(0);
+                leftBack.setPower(0);
+                rightBack.setPower(0);
+                rightFront.setPower(0);
+            }
+        };
+    }
+
+    public Lambda turnCommand(TimeTurn turn) {
+        return new Lambda("Turn") {
+
+            double t = 0;
+            final double beginTs = System.nanoTime() * 1e-9;
+
+            boolean finished = false;
+
+            @Override
+            public void execute() {
+                t = (System.nanoTime() * 1e-9) - beginTs;
+                finished = turn(turn, t);
             }
 
             @Override

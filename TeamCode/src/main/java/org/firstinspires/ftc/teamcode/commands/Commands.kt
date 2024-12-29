@@ -1,25 +1,42 @@
 package org.firstinspires.ftc.teamcode.commands
 
 import com.acmerobotics.roadrunner.AccelConstraint
+import com.acmerobotics.roadrunner.Arclength
+import com.acmerobotics.roadrunner.DualNum
+import com.acmerobotics.roadrunner.IdentityPoseMap
 import com.acmerobotics.roadrunner.Pose2d
+import com.acmerobotics.roadrunner.Pose2dDual
+import com.acmerobotics.roadrunner.PoseMap
 import com.acmerobotics.roadrunner.Rotation2d
+import com.acmerobotics.roadrunner.Rotation2dDual
 import com.acmerobotics.roadrunner.TimeProfile
+import com.acmerobotics.roadrunner.TimeTurn
 import com.acmerobotics.roadrunner.Trajectory
 import com.acmerobotics.roadrunner.TrajectoryBuilder
 import com.acmerobotics.roadrunner.TrajectoryBuilderParams
+import com.acmerobotics.roadrunner.TurnConstraints
 import com.acmerobotics.roadrunner.Vector2d
+import com.acmerobotics.roadrunner.Vector2dDual
 import com.acmerobotics.roadrunner.VelConstraint
 import dev.frozenmilk.mercurial.commands.Command
 import dev.frozenmilk.mercurial.commands.groups.Parallel
 import dev.frozenmilk.mercurial.commands.groups.Sequential
 import dev.frozenmilk.mercurial.commands.util.Wait
 
-class TrajectoryCommandBuilder(
-    private val factory: (Trajectory) -> Command,
+/**
+ * Builder that combines trajectories, turns, and other Commands.
+ */
+class TrajectoryCommandBuilder
+
+@JvmOverloads constructor(
+    private val trajectoryFactory: (Trajectory) -> Command,
+    private val turnFactory: (TimeTurn) -> Command,
     beginPose: Pose2d,
-    private var params: TrajectoryBuilderParams,
-    private var baseVelConstraint: VelConstraint,
-    private var baseAccelConstraint: AccelConstraint,
+    private val params: TrajectoryBuilderParams,
+    private val baseVelConstraint: VelConstraint,
+    private val baseAccelConstraint: AccelConstraint,
+    private val baseTurnConstraint: TurnConstraints,
+    private val poseMap: PoseMap = IdentityPoseMap(),
 ) {
     private var builder = TrajectoryBuilder(
         params,
@@ -36,11 +53,10 @@ class TrajectoryCommandBuilder(
         if (size != commands.size) {
             val built = builder.build()
             built
-                .map { factory(it) }
+                .map { trajectoryFactory(it) }
                 .forEach { commands.add(it) }
 
             val lastPose = built.last().path.end(1).value()
-            val lastMap = built.last().path.poseMap
 
             builder = TrajectoryBuilder(
                 params,
@@ -48,11 +64,28 @@ class TrajectoryCommandBuilder(
                 0.0,
                 baseVelConstraint,
                 baseAccelConstraint,
-                lastMap
+                poseMap
             )
         }
 
         return this
+    }
+
+    fun fresh(): TrajectoryCommandBuilder {
+        val built = builder.build()
+
+        val lastPose = built.last().path.end(1).value()
+
+        return TrajectoryCommandBuilder(
+            trajectoryFactory,
+            turnFactory,
+            lastPose,
+            params,
+            baseVelConstraint,
+            baseAccelConstraint,
+            baseTurnConstraint,
+            poseMap,
+        )
     }
 
     fun build(): Command {
@@ -267,5 +300,60 @@ class TrajectoryCommandBuilder(
             velOverride,
             accelOverride
         )
+    }
+
+    @JvmOverloads
+    fun turn(
+        angle: Double,
+        turnOverride: TurnConstraints? = null
+    ): TrajectoryCommandBuilder {
+        val built = builder.build()
+
+        val lastPose = built.last().path.end(1).value()
+
+        val mappedAngle = poseMap.map(
+                Pose2dDual(
+                    Vector2dDual.constant(lastPose.position, 2),
+                    Rotation2dDual.constant<Arclength>(lastPose.heading, 2) + DualNum(listOf(0.0, angle))
+                )
+            ).heading.velocity().value()
+
+        return this.stopAndAdd(
+            turnFactory(
+                TimeTurn(
+                    lastPose,
+                    mappedAngle,
+                    turnOverride ?: baseTurnConstraint
+                )
+            )
+        )
+    }
+
+    @JvmOverloads
+    fun turn(
+        angle: Rotation2d,
+        turnOverride: TurnConstraints? = null
+    ): TrajectoryCommandBuilder {
+        return this.turn(angle.toDouble(), turnOverride)
+    }
+
+    @JvmOverloads
+    fun turnTo(
+        angle: Double,
+        turnOverride: TurnConstraints? = null
+    ): TrajectoryCommandBuilder {
+        val built = builder.build()
+
+        val lastPose = built.last().path.end(1).value()
+
+        return this.turn(angle - lastPose.heading.toDouble(), turnOverride)
+    }
+
+    @JvmOverloads
+    fun turnTo(
+        angle: Rotation2d,
+        turnOverride: TurnConstraints? = null
+    ): TrajectoryCommandBuilder {
+        return this.turnTo(angle.toDouble(), turnOverride)
     }
 }
