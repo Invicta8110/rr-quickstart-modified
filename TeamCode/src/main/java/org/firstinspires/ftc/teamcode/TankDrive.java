@@ -59,7 +59,10 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Set;
 
+import dev.frozenmilk.dairy.core.wrapper.Wrapper;
+import dev.frozenmilk.mercurial.commands.Command;
 import dev.frozenmilk.mercurial.commands.Lambda;
 
 @Config
@@ -665,12 +668,26 @@ public final class TankDrive {
         );
     }
 
-    public Lambda followTrajectoryCommand(Trajectory trajectory) {
-        return new Lambda("Trajectory") {
+    public Command followTrajectoryCommand(Trajectory trajectory) {
+        Set<Object> reqs = Set.of(this);
+        Set<Wrapper.OpModeState> states = Set.of(Wrapper.OpModeState.ACTIVE);
+
+        return new Command() {
             double t = 0;
             final double beginTs = System.nanoTime() * 1e-9;
 
             boolean finished = false;
+
+            @NonNull
+            @Override
+            public Set<Object> getRequirements() { return reqs; }
+
+            @NonNull
+            @Override
+            public Set<Wrapper.OpModeState> getRunStates() { return states; }
+
+            @Override
+            public void initialise() {}
 
             @Override
             public void execute() {
@@ -691,12 +708,31 @@ public final class TankDrive {
         };
     }
 
-    public Lambda turnCommand(TimeTurn turn) {
-        return new Lambda("Turn") {
+    public Command turnCommand(TimeTurn turn) {
+        Set<Object> reqs = Set.of(this);
+        Set<Wrapper.OpModeState> states = Set.of(Wrapper.OpModeState.ACTIVE);
+
+        return new Command() {
             double t = 0;
             final double beginTs = System.nanoTime() * 1e-9;
 
             boolean finished = false;
+
+
+            @NonNull
+            @Override
+            public Set<Object> getRequirements() {
+                return reqs;
+            }
+
+            @NonNull
+            @Override
+            public Set<Wrapper.OpModeState> getRunStates() {
+                return states;
+            }
+
+            @Override
+            public void initialise() {}
 
             @Override
             public void execute() {

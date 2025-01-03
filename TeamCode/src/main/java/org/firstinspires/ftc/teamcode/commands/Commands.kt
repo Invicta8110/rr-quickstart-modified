@@ -46,7 +46,9 @@ class TrajectoryCommandBuilder
         baseAccelConstraint
     )
 
-    private var size = 0
+    var size = 0
+        private set
+
     private val commands: MutableList<Command> = mutableListOf()
 
     fun endTrajectory(): TrajectoryCommandBuilder {
@@ -307,6 +309,8 @@ class TrajectoryCommandBuilder
         angle: Double,
         turnOverride: TurnConstraints? = null
     ): TrajectoryCommandBuilder {
+        size += 1;
+
         val built = builder.build()
 
         val lastPose = built.last().path.end(1).value()
@@ -342,6 +346,8 @@ class TrajectoryCommandBuilder
         angle: Double,
         turnOverride: TurnConstraints? = null
     ): TrajectoryCommandBuilder {
+        size += 1;
+
         val built = builder.build()
 
         val lastPose = built.last().path.end(1).value()
